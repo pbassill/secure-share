@@ -2,15 +2,14 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../app/bootstrap.php';
-
-if (session_status() !== PHP_SESSION_ACTIVE) {
-    session_start();
-}
-
 require __DIR__ . '/../app/db.php';
 require __DIR__ . '/../app/storage.php';
 require __DIR__ . '/../app/rate_limit.php';
 require __DIR__ . '/../app/api.php';
+
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
 
 $pdo = db($config);
 
@@ -22,22 +21,41 @@ header('Referrer-Policy: no-referrer');
 header('Cache-Control: no-store');
 
 if (str_starts_with($uri, '/api/')) {
-    // CORS deliberately not enabled; SPA should be same-origin.
-    $parts = explode('/', trim($uri, '/'));
 
-    // /api/share/init
+    if ($uri === '/api/pow/challenge') {
+        api_pow_challenge($pdo, $config);
+    }
+
     if ($uri === '/api/share/init') {
         api_share_init($pdo, $config);
     }
 
+    if ($uri === '/api/auth/register/options') api_auth_register_options($pdo, $config);
+    if ($uri === '/api/auth/register/verify') api_auth_register_verify($pdo, $config);
+    if ($uri === '/api/auth/login/options') api_auth_login_options($pdo, $config);
+    if ($uri === '/api/auth/login/verify') api_auth_login_verify($pdo, $config);
+    if ($uri === '/api/auth/logout') api_auth_logout();
+
+    $parts = explode('/', trim($uri, '/'));
+
     // /api/share/{locator}/chunk/{i}
     if (count($parts) === 5 && $parts[1] === 'share' && $parts[3] === 'chunk') {
-        api_put_chunk($pdo, $config, $parts[2], (int)$parts[4]);
+        if ($_SERVER['REQUEST_METHOD'] === 'PUT') {
+            api_put_chunk($pdo, $config, $parts[2], (int)$parts[4]);
+        }
+        if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+            api_get_chunk($pdo, $config, $parts[2], (int)$parts[4]);
+        }
     }
 
     // /api/share/{locator}/manifest
-    if (count($parts) === 4 && $parts[1] === 'share' && $parts[3] === 'manifest' && $_SERVER['REQUEST_METHOD'] === 'PUT') {
-        api_put_manifest($pdo, $config, $parts[2]);
+    if (count($parts) === 4 && $parts[1] === 'share' && $parts[3] === 'manifest') {
+        if ($_SERVER['REQUEST_METHOD'] === 'PUT') {
+            api_put_manifest($pdo, $config, $parts[2]);
+        }
+        if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+            api_get_manifest($pdo, $config, $parts[2]);
+        }
     }
 
     // /api/share/{locator}/complete
@@ -45,35 +63,15 @@ if (str_starts_with($uri, '/api/')) {
         api_complete($pdo, $config, $parts[2]);
     }
 
-    // /api/share/{locator}/manifest (GET)
-    if (count($parts) === 4 && $parts[1] === 'share' && $parts[3] === 'manifest' && $_SERVER['REQUEST_METHOD'] === 'GET') {
-        api_get_manifest($pdo, $config, $parts[2]);
-    }
-
-    // /api/share/{locator}/chunk/{i} (GET)
-    if (count($parts) === 5 && $parts[1] === 'share' && $parts[3] === 'chunk' && $_SERVER['REQUEST_METHOD'] === 'GET') {
-        api_get_chunk($pdo, $config, $parts[2], (int)$parts[4]);
-    }
-
     // /api/share/{locator}/delete
     if (count($parts) === 4 && $parts[1] === 'share' && $parts[3] === 'delete') {
         api_delete($pdo, $config, $parts[2]);
     }
 
-    if ($uri === '/api/pow/challenge') {
-        api_pow_challenge($pdo, $config);
-    }
-    
-    if ($uri === '/api/auth/register/options') api_auth_register_options($pdo, $config);
-    if ($uri === '/api/auth/register/verify') api_auth_register_verify($pdo, $config);
-    if ($uri === '/api/auth/login/options') api_auth_login_options($pdo, $config);
-    if ($uri === '/api/auth/login/verify') api_auth_login_verify($pdo, $config);
-    if ($uri === '/api/auth/logout') api_auth_logout();
-
     json_response(['error' => 'Not found'], 404);
 }
 
-// Single-page app HTML (no fragment is ever sent to server)
+// Single-page app HTML
 $csp = "default-src 'none'; "
      . "base-uri 'none'; "
      . "form-action 'none'; "
