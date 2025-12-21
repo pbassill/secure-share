@@ -31,6 +31,11 @@ function clamp_expires(array $config, ?int $requested_epoch): int {
     return min($requested_epoch, $max);
 }
 
+function is_authenticated(): bool {
+    // Minimal session check. Replace later with WebAuthn session logic.
+    return !empty($_SESSION['user_id']);
+}
+
 function api_share_init(PDO $pdo, array $config): never {
     require_method('POST');
 
@@ -54,30 +59,61 @@ function api_share_init(PDO $pdo, array $config): never {
         json_response(['error' => 'Invalid chunk count'], 400);
     }
 
-    // Anonymous enforcement (account logic can be added later)
-    $isAuthed = false; // Replace with session check when accounts exist
-    if (!$isAuthed) {
+    // Client-supplied locator
+    $locatorHex = strtolower((string)($data['locator_hex'] ?? ''));
+    if (!preg_match('/^[0-9a-f]{48}$/', $locatorHex)) {
+        json_response(['error' => 'Invalid locator'], 400);
+    }
+    $locator = hex2bin($locatorHex);
+    if ($locator === false || strlen($locator) !== 24) {
+        json_response(['error' => 'Invalid locator'], 400);
+    }
+
+    // Delete token hash (SHA-256(delete_token)) computed client-side
+    $dth = (string)($data['delete_token_hash_b64u'] ?? '');
+    $dthBin = b64url_decode($dth);
+    if ($dthBin === '' || strlen($dthBin) !== 32) {
+        json_response(['error' => 'Invalid delete token hash'], 400);
+    }
+
+    // Policy enforcement
+    $authed = is_authenticated();
+
+    if (!$authed) {
         if ($size > (int)$config['anon_max_bytes']) {
             json_response(['error' => 'Anonymous uploads limited to 100MB'], 403);
         }
+        // Anonymous retention is capped at 6 hours (no override)
+        $maxAnon = time() + (int)$config['default_retention_seconds'];
+        $requested = isset($data['expires_at_epoch']) ? (int)$data['expires_at_epoch'] : 0;
+        $expiresEpoch = $maxAnon;
+        if ($requested > 0) {
+            $expiresEpoch = min($requested, $maxAnon);
+        }
+        // Enforce anon rate limit (clearnet cookie bucket)
         enforce_anon_rate_limit($pdo, $config);
+
+        // PoW for Tor/I2P (optional but recommended). We enforce if the client indicates tor/i2p,
+        // or if you choose to enforce universally for anonymous to reduce abuse.
+        $network = (string)($data['network'] ?? 'clearnet'); // client hint: clearnet|tor|i2p
+        if (in_array($network, ['tor','i2p'], true)) {
+            verify_pow($pdo, $config, $data, $locator); // defined later
+        }
+
+        $expiresAt = gmdate('Y-m-d H:i:s', $expiresEpoch);
+
+    } else {
+        // Authenticated: allow override up to 14 days
+        $requested = isset($data['expires_at_epoch']) ? (int)$data['expires_at_epoch'] : null;
+        $expiresEpoch = clamp_expires($config, $requested);
+        $expiresAt = gmdate('Y-m-d H:i:s', $expiresEpoch);
     }
 
-    $requestedExpires = null;
-    if (isset($data['expires_at_epoch'])) {
-        $requestedExpires = (int)$data['expires_at_epoch'];
-    }
-    $expiresEpoch = clamp_expires($config, $requestedExpires);
-    $expiresAt = gmdate('Y-m-d H:i:s', $expiresEpoch);
-
-    $locator = random_bytes(24);
-
-    // Delete token hash is provided by client? Prefer server-side storage of hash only.
-    // Here we accept a client-provided delete_token_hash (base64url of 32 bytes).
-    $dth = $data['delete_token_hash_b64u'] ?? '';
-    $dthBin = b64url_decode((string)$dth);
-    if ($dthBin === '' || strlen($dthBin) !== 32) {
-        json_response(['error' => 'Invalid delete token hash'], 400);
+    // Reject collisions: locator is the key
+    $stmt = $pdo->prepare("SELECT 1 FROM shares WHERE locator = ?");
+    $stmt->execute([$locator]);
+    if ($stmt->fetch()) {
+        json_response(['error' => 'Locator already exists'], 409);
     }
 
     $now = gmdate('Y-m-d H:i:s');
@@ -97,13 +133,15 @@ function api_share_init(PDO $pdo, array $config): never {
     ensure_storage_dir($config, $locator);
 
     json_response([
-        'locator_hex' => locator_hex($locator),
+        'locator_hex' => $locatorHex,
         'upload_token' => $uploadToken,
-        'expires_at_epoch' => $expiresEpoch,
+        'expires_at_epoch' => strtotime($expiresAt . ' UTC'),
         'chunk_size' => $chunkSize,
         'chunk_count' => $chunkCount,
+        'authed' => $authed,
     ], 200);
 }
+
 
 function verify_upload_token(PDO $pdo, array $config, string $locator, string $token): void {
     $tokenHash = hash('sha256', $token . $config['app_secret'], true);
