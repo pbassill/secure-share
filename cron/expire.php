@@ -15,13 +15,13 @@ $rows = $stmt->fetchAll();
 
 foreach ($rows as $r) {
     $locator = $r['locator'];
-    // Mark expired first (idempotent)
     $pdo->prepare("UPDATE shares SET status='expired' WHERE locator=?")->execute([$locator]);
     $pdo->prepare("DELETE FROM uploads WHERE locator=?")->execute([$locator]);
     delete_share_files($config, $locator);
 }
 
-// Also clear expired upload tokens
+// Clear expired upload tokens
 $pdo->prepare("DELETE FROM uploads WHERE token_expires_at < ?")->execute([$now]);
-$pdo->prepare("DELETE FROM pow_challenges WHERE expires_at < ?")->execute([$now]);
 
+// Clear expired PoW challenges
+$pdo->prepare("DELETE FROM pow_challenges WHERE expires_at < ?")->execute([$now]);
