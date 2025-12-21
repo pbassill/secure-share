@@ -2,6 +2,11 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../app/bootstrap.php';
+
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
+
 require __DIR__ . '/../app/db.php';
 require __DIR__ . '/../app/storage.php';
 require __DIR__ . '/../app/rate_limit.php';
