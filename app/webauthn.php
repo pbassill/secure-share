@@ -126,7 +126,10 @@ function verify_webauthn_attestation(
     
     // Parse attestation object (CBOR)
     try {
-        $attestationDecoded = \CBOR\CBOREncoder::decode($attestationObject);
+        $stream = new \CBOR\StringStream($attestationObject);
+        $decoder = \CBOR\Decoder::create();
+        $attestationObj = $decoder->decode($stream);
+        $attestationDecoded = $attestationObj->normalize();
     } catch (Throwable $e) {
         throw new Exception('Failed to decode attestation object: ' . $e->getMessage());
     }
@@ -182,7 +185,10 @@ function verify_webauthn_attestation(
     // Extract public key (CBOR encoded COSE key)
     $publicKeyCbor = substr($authData, $offset);
     try {
-        $publicKeyData = \CBOR\CBOREncoder::decode($publicKeyCbor);
+        $stream = new \CBOR\StringStream($publicKeyCbor);
+        $decoder = \CBOR\Decoder::create();
+        $publicKeyObj = $decoder->decode($stream);
+        $publicKeyData = $publicKeyObj->normalize();
     } catch (Throwable $e) {
         throw new Exception('Failed to decode public key: ' . $e->getMessage());
     }
@@ -308,7 +314,10 @@ function verify_webauthn_assertion(
     
     // Decode the public key from CBOR
     try {
-        $publicKeyData = \CBOR\CBOREncoder::decode($credentialSource->credentialPublicKey);
+        $stream = new \CBOR\StringStream($credentialSource->credentialPublicKey);
+        $decoder = \CBOR\Decoder::create();
+        $publicKeyObj = $decoder->decode($stream);
+        $publicKeyData = $publicKeyObj->normalize();
     } catch (Throwable $e) {
         throw new Exception('Failed to decode stored public key: ' . $e->getMessage());
     }
