@@ -270,6 +270,26 @@ async function handleUpload() {
   const manifestCipher = await aesGcmEncrypt(encKey, mNonce, manifestJson, mAad);
 
   await apiPutBytes(`/api/share/${init.locator_hex}/manifest`, manifestCipher, init.upload_token);
+
+  const hostname = location.hostname.toLowerCase();
+  const network = (hostname.endsWith('.onion')) ? 'tor'
+                : (hostname.endsWith('.i2p')) ? 'i2p'
+                : 'clearnet';
+  
+  let powPayload = {};
+  if (network === 'tor' || network === 'i2p') {
+    out.textContent = 'Requesting PoW challenge...\n';
+    const pow = await apiJson('/api/pow/challenge', 'GET');
+    const challenge = b64urlDecode(pow.challenge_b64u);
+    const nonce = await solvePow(challenge, locator, pow.difficulty_bits);
+    powPayload = {
+      network,
+      pow_challenge_id_b64u: pow.challenge_id_b64u,
+      pow_challenge_b64u: pow.challenge_b64u,
+      pow_nonce_b64u: b64urlEncode(nonce),
+    };
+  }
+
   await apiJson(`/api/share/${init.locator_hex}/complete`, 'POST', null, init.upload_token);
 
   // Pack code and present link (fragment)
@@ -358,6 +378,31 @@ async function handleRetrieve() {
   const name = manifest.name || 'download.bin';
   dl.textContent += `\nReady:\n${name}\n`;
   dl.innerHTML += `<p><a href="${url}" download="${name}">Download</a></p>`;
+}
+
+function leadingZeroBits(bytes32) {
+  let bits = 0;
+  for (let i = 0; i < 32; i++) {
+    const v = bytes32[i];
+    if (v === 0) { bits += 8; continue; }
+    for (let b = 7; b >= 0; b--) {
+      if ((v & (1 << b)) === 0) bits++;
+      else return bits;
+    }
+  }
+  return bits;
+}
+
+async function solvePow(challenge32, locator24, difficultyBits) {
+  // Brute force random nonces; 8-byte nonce
+  // Returns nonce Uint8Array(8)
+  while (true) {
+    const nonce = crypto.getRandomValues(new Uint8Array(8));
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', concatBytes(challenge32, locator24, nonce)));
+    if (leadingZeroBits(digest) >= difficultyBits) return nonce;
+    // Optional yield to UI
+    await new Promise(r => setTimeout(r, 0));
+  }
 }
 
 function boot() {
