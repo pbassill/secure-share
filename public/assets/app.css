@@ -1,0 +1,6 @@
+/* Minimal styling; keep zero third-party dependencies */
+body { margin: 0; background: #ffffff; color: #111; }
+button { padding: 0.5rem 0.75rem; border: 1px solid #ccc; background: #f7f7f7; border-radius: 8px; cursor: pointer; }
+button:hover { background: #efefef; }
+input, textarea, select { border: 1px solid #ccc; border-radius: 8px; padding: 0.5rem; }
+textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }

@@ -201,7 +201,6 @@ function handleUiError(outId) {
 /* -------------------------- Boot -------------------------- */
 
 async function boot() {
-  // If fragment contains a code, prefill retrieval.
   const fragment = (location.hash || '').replace(/^#/, '').trim();
   const prefill = fragment ? location.href : '';
   renderHome(prefill);
@@ -254,7 +253,6 @@ function u32be(n) {
 }
 
 function u64beFromRandom() {
-  // Returns an 8-byte nonce for PoW.
   return crypto.getRandomValues(new Uint8Array(8));
 }
 
@@ -345,12 +343,10 @@ function nonceForManifest(baseNonce8) {
 }
 
 function aadFor(locator24, version, kindByte, indexU32) {
-  // AAD = "SS" + version + kind + locator + index
   const prefix = new Uint8Array([0x53, 0x53]); // 'S''S'
   return concatBytes(prefix, new Uint8Array([version & 0xff]), new Uint8Array([kindByte & 0xff]), locator24, u32be(indexU32 >>> 0));
 }
 
-// kindByte values
 const AAD_KIND_CHUNK = 0x01;
 const AAD_KIND_MANIFEST = 0x02;
 
@@ -360,8 +356,6 @@ async function mixPassphraseIntoKeyseed(keyseed32, salt16, passphrase) {
   const pp = String(passphrase || '');
   if (!pp) return keyseed32;
 
-  // PBKDF2-SHA-256 with a high iteration count (tune for usability).
-  // This is not as strong as Argon2id but avoids bringing a JS crypto dependency.
   const iterations = 250000;
 
   const enc = new TextEncoder();
@@ -373,7 +367,6 @@ async function mixPassphraseIntoKeyseed(keyseed32, salt16, passphrase) {
   );
   const derived = new Uint8Array(bits);
 
-  // Mix by XOR: mixed = keyseed XOR derived
   const mixed = new Uint8Array(32);
   for (let i = 0; i < 32; i++) mixed[i] = keyseed32[i] ^ derived[i];
   return mixed;
@@ -382,7 +375,6 @@ async function mixPassphraseIntoKeyseed(keyseed32, salt16, passphrase) {
 /* -------------------------- Delete token derivation -------------------------- */
 
 async function deriveDeleteToken(delseed32, salt16) {
-  // Lightweight HKDF-like derivation: SHA-256(delseed || salt || "del:v1")
   const info = new TextEncoder().encode('del:v1');
   const tok = await sha256(concatBytes(delseed32, salt16, info));
   return tok; // 32 bytes
@@ -420,7 +412,6 @@ async function solvePow(challenge32, locator24, difficultyBits, progressCb) {
     attempts++;
     if (attempts % 500 === 0 && typeof progressCb === 'function') progressCb(attempts);
     if (leadingZeroBits(digest) >= difficultyBits) return nonce;
-    // Yield to keep UI responsive.
     if (attempts % 200 === 0) await new Promise(r => setTimeout(r, 0));
   }
 }
@@ -474,7 +465,6 @@ async function uploadFile() {
 
   const network = detectNetwork();
 
-  // Generate client secrets
   const locator = crypto.getRandomValues(new Uint8Array(24));
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const keyseedRaw = crypto.getRandomValues(new Uint8Array(32));
@@ -490,15 +480,14 @@ async function uploadFile() {
   const sizeBytes = file.size;
   const chunkCount = Math.ceil(sizeBytes / chunkSize);
 
-  // PoW for Tor/I2P (or optionally for clearnet anonymous)
   let powPayload = {};
   if (network === 'tor' || network === 'i2p' || usePowAllAnon) {
-    out.textContent += `Requesting proof-of-work challenge (${network}${usePowAllAnon && network === 'clearnet' ? ', forced' : ''})...\n`;
+    out.textContent += `Requesting proof-of-work challenge (${network}${usePowAllAnon && network === 'clearnet' ? ', forced' : ''})...\\n`;
     const pow = await apiJson('/api/pow/challenge', 'GET');
     const challenge = b64urlDecode(pow.challenge_b64u);
-    out.textContent += `Solving proof-of-work (difficulty ${pow.difficulty_bits} bits)...\n`;
+    out.textContent += `Solving proof-of-work (difficulty ${pow.difficulty_bits} bits)...\\n`;
     const nonce = await solvePow(challenge, locator, pow.difficulty_bits, (attempts) => {
-      out.textContent = out.textContent.split('\n').slice(0, 2).join('\n') + `\nPoW attempts: ${attempts}\n`;
+      out.textContent = out.textContent.split('\\n').slice(0, 2).join('\\n') + `\\nPoW attempts: ${attempts}\\n`;
     });
     powPayload = {
       network: (network === 'clearnet' && usePowAllAnon) ? 'clearnet' : network,
@@ -506,11 +495,10 @@ async function uploadFile() {
       pow_challenge_b64u: pow.challenge_b64u,
       pow_nonce_b64u: b64urlEncode(nonce),
     };
-    out.textContent += `PoW solved.\n`;
+    out.textContent += `PoW solved.\\n`;
   }
 
-  // Init share server-side (server sees locator only; never sees keys)
-  out.textContent += `Initialising share...\n`;
+  out.textContent += `Initialising share...\\n`;
 
   const init = await apiJson('/api/share/init', 'POST', {
     locator_hex: bytesToHex(locator),
@@ -526,8 +514,7 @@ async function uploadFile() {
     throw new Error('Server did not accept the provided locator (collision or validation failure).');
   }
 
-  // Encrypt and upload chunks
-  out.textContent += `Encrypting and uploading ${chunkCount} chunks...\n`;
+  out.textContent += `Encrypting and uploading ${chunkCount} chunks...\\n`;
 
   for (let i = 0; i < chunkCount; i++) {
     const start = i * chunkSize;
@@ -541,11 +528,10 @@ async function uploadFile() {
     await apiPutBytes(`/api/share/${init.locator_hex}/chunk/${i}`, cipher, init.upload_token);
 
     if ((i + 1) % 5 === 0 || i === chunkCount - 1) {
-      out.textContent += `Uploaded chunk ${i + 1} of ${chunkCount}\n`;
+      out.textContent += `Uploaded chunk ${i + 1} of ${chunkCount}\\n`;
     }
   }
 
-  // Build and upload encrypted manifest
   const manifest = {
     v: APP.VERSION,
     type: 'file',
@@ -553,8 +539,6 @@ async function uploadFile() {
     chunk_size: chunkSize,
     chunk_count: chunkCount,
     name: file.name || null,
-    // baseNonce8 is not stored plaintext server-side; it is carried inside the code.
-    // We do not include mime/type in plaintext; keep it absent unless you want it within encrypted manifest.
   };
 
   const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
@@ -565,28 +549,25 @@ async function uploadFile() {
   await apiPutBytes(`/api/share/${init.locator_hex}/manifest`, manifestCipher, init.upload_token);
   await apiJson(`/api/share/${init.locator_hex}/complete`, 'POST', null, init.upload_token);
 
-  // Pack code and present link
   const payload = makeCodePayload({
     version: APP.VERSION,
     flags: APP.FLAG_FILE,
     locator24: locator,
     salt16: salt,
-    keyseed32: keyseedRaw, // store raw keyseed in code, not the passphrase-mixed key
+    keyseed32: keyseedRaw,
     delseed32: delseed,
     baseNonce8: baseNonce8
   });
 
-  // Important: If passphrase is used, recipients must supply it; we store raw keyseed and salt,
-  // and we re-derive the mixed key on retrieval.
   const code = b64urlEncode(payload);
   const link = `${location.origin}/#${code}`;
 
-  out.textContent += `\nShare link (copy and send):\n${link}\n`;
-  out.textContent += `\nDelete token (keep private):\n${b64urlEncode(deleteToken)}\n`;
+  out.textContent += `\\nShare link (copy and send):\\n${link}\\n`;
+  out.textContent += `\\nDelete token (keep private):\\n${b64urlEncode(deleteToken)}\\n`;
 
-  out.textContent += `\nNotes:\n`;
-  out.textContent += `- The server cannot decrypt content.\n`;
-  out.textContent += `- If you set a passphrase, the recipient must know it.\n`;
+  out.textContent += `\\nNotes:\\n`;
+  out.textContent += `- The server cannot decrypt content.\\n`;
+  out.textContent += `- If you set a passphrase, the recipient must know it.\\n`;
 }
 
 /* -------------------------- Upload: paste -------------------------- */
@@ -612,7 +593,6 @@ async function uploadPaste() {
   const sizeBytes = plainAll.length;
   const chunkCount = Math.ceil(sizeBytes / chunkSize);
 
-  // Generate client secrets
   const locator = crypto.getRandomValues(new Uint8Array(24));
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const keyseedRaw = crypto.getRandomValues(new Uint8Array(32));
@@ -625,13 +605,12 @@ async function uploadPaste() {
   const deleteToken = await deriveDeleteToken(delseed, salt);
   const deleteTokenHash = await sha256(deleteToken);
 
-  // PoW for Tor/I2P (or forced)
   let powPayload = {};
   if (network === 'tor' || network === 'i2p' || usePowAllAnon) {
-    out.textContent += `Requesting proof-of-work challenge...\n`;
+    out.textContent += `Requesting proof-of-work challenge...\\n`;
     const pow = await apiJson('/api/pow/challenge', 'GET');
     const challenge = b64urlDecode(pow.challenge_b64u);
-    out.textContent += `Solving proof-of-work (difficulty ${pow.difficulty_bits} bits)...\n`;
+    out.textContent += `Solving proof-of-work (difficulty ${pow.difficulty_bits} bits)...\\n`;
     const nonce = await solvePow(challenge, locator, pow.difficulty_bits);
     powPayload = {
       network: (network === 'clearnet' && usePowAllAnon) ? 'clearnet' : network,
@@ -639,11 +618,10 @@ async function uploadPaste() {
       pow_challenge_b64u: pow.challenge_b64u,
       pow_nonce_b64u: b64urlEncode(nonce),
     };
-    out.textContent += `PoW solved.\n`;
+    out.textContent += `PoW solved.\\n`;
   }
 
-  // Init
-  out.textContent += `Initialising share...\n`;
+  out.textContent += `Initialising share...\\n`;
   const init = await apiJson('/api/share/init', 'POST', {
     locator_hex: bytesToHex(locator),
     type: 'paste',
@@ -658,8 +636,7 @@ async function uploadPaste() {
     throw new Error('Server did not accept the provided locator (collision or validation failure).');
   }
 
-  // Upload chunks
-  out.textContent += `Encrypting and uploading ${chunkCount} chunks...\n`;
+  out.textContent += `Encrypting and uploading ${chunkCount} chunks...\\n`;
   for (let i = 0; i < chunkCount; i++) {
     const start = i * chunkSize;
     const end = Math.min(start + chunkSize, sizeBytes);
@@ -671,11 +648,10 @@ async function uploadPaste() {
 
     await apiPutBytes(`/api/share/${init.locator_hex}/chunk/${i}`, cipher, init.upload_token);
     if ((i + 1) % 5 === 0 || i === chunkCount - 1) {
-      out.textContent += `Uploaded chunk ${i + 1} of ${chunkCount}\n`;
+      out.textContent += `Uploaded chunk ${i + 1} of ${chunkCount}\\n`;
     }
   }
 
-  // Manifest
   const manifest = {
     v: APP.VERSION,
     type: 'paste',
@@ -693,7 +669,6 @@ async function uploadPaste() {
   await apiPutBytes(`/api/share/${init.locator_hex}/manifest`, manifestCipher, init.upload_token);
   await apiJson(`/api/share/${init.locator_hex}/complete`, 'POST', null, init.upload_token);
 
-  // Code and link
   const payload = makeCodePayload({
     version: APP.VERSION,
     flags: APP.FLAG_PAS,
@@ -707,8 +682,8 @@ async function uploadPaste() {
   const code = b64urlEncode(payload);
   const link = `${location.origin}/#${code}`;
 
-  out.textContent += `\nShare link (copy and send):\n${link}\n`;
-  out.textContent += `\nDelete token (keep private):\n${b64urlEncode(deleteToken)}\n`;
+  out.textContent += `\\nShare link (copy and send):\\n${link}\\n`;
+  out.textContent += `\\nDelete token (keep private):\\n${b64urlEncode(deleteToken)}\\n`;
 }
 
 /* -------------------------- Retrieve -------------------------- */
@@ -731,13 +706,11 @@ async function retrieveShare() {
   const parsed = parseCodePayload(payloadBytes);
   if (parsed.version !== APP.VERSION) throw new Error('Unsupported code version.');
 
-  // Re-derive AES key: mix passphrase (if provided) into raw keyseed
   const mixedKeyseed = await mixPassphraseIntoKeyseed(parsed.keyseed, parsed.salt, passphrase);
   const encKey = await importAesGcmKey(mixedKeyseed);
 
   const locatorHex = bytesToHex(parsed.locator);
 
-  // Fetch and decrypt manifest
   const manifestCipher = await apiGetBytes(`/api/share/${locatorHex}/manifest`);
   const mNonce12 = nonceForManifest(parsed.baseNonce8);
   const mAad = aadFor(parsed.locator, parsed.version, AAD_KIND_MANIFEST, APP.MANIFEST_INDEX);
@@ -754,18 +727,14 @@ async function retrieveShare() {
 
   const chunkCount = manifest.chunk_count;
   const totalSize = manifest.size;
-  const chunkSize = manifest.chunk_size;
   const type = manifest.type;
 
   if (!Number.isInteger(chunkCount) || chunkCount <= 0) throw new Error('Invalid manifest (chunk_count).');
   if (!Number.isInteger(totalSize) || totalSize < 0) throw new Error('Invalid manifest (size).');
 
-  out.textContent = `Decrypting ${chunkCount} chunks...\n`;
+  out.textContent = `Decrypting ${chunkCount} chunks...\\n`;
 
-  // Fetch, decrypt, and reassemble
   const parts = [];
-  let received = 0;
-
   for (let i = 0; i < chunkCount; i++) {
     const cipher = await apiGetBytes(`/api/share/${locatorHex}/chunk/${i}`);
     const nonce12 = nonceForChunk(parsed.baseNonce8, i);
@@ -779,14 +748,12 @@ async function retrieveShare() {
     }
 
     parts.push(plain);
-    received += plain.length;
 
     if ((i + 1) % 5 === 0 || i === chunkCount - 1) {
-      out.textContent = `Decrypting ${chunkCount} chunks...\nDecrypted ${i + 1} of ${chunkCount}\n`;
+      out.textContent = `Decrypting ${chunkCount} chunks...\\nDecrypted ${i + 1} of ${chunkCount}\\n`;
     }
   }
 
-  // Join into a single buffer
   const outBytes = new Uint8Array(totalSize);
   let off = 0;
   for (const p of parts) {
@@ -794,14 +761,9 @@ async function retrieveShare() {
     off += p.length;
   }
 
-  if (off !== totalSize) {
-    // Not fatal, but indicates mismatch; truncate if needed.
-    // We will keep declared totalSize as authoritative for output.
-  }
-
   if (type === 'paste') {
     const text = new TextDecoder().decode(outBytes);
-    out.textContent += `\nPaste decrypted successfully.\n`;
+    out.textContent += `\\nPaste decrypted successfully.\\n`;
     if (links) {
       links.innerHTML = `
         <h3 style="margin:0.5rem 0;">Paste content</h3>
@@ -811,12 +773,11 @@ async function retrieveShare() {
     return;
   }
 
-  // File output
   const name = manifest.name || 'download.bin';
   const blob = new Blob([outBytes], { type: 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
 
-  out.textContent += `\nFile ready: ${name}\n`;
+  out.textContent += `\\nFile ready: ${name}\\n`;
 
   if (links) {
     links.innerHTML = `
@@ -829,15 +790,8 @@ async function retrieveShare() {
 function extractCodeFromInput(input) {
   const s = String(input || '').trim();
   if (!s) return '';
-
-  // If user pasted a full URL containing '#'
   const hashIdx = s.indexOf('#');
-  if (hashIdx >= 0) {
-    const frag = s.slice(hashIdx + 1).trim();
-    return frag;
-  }
-
-  // Otherwise assume it's just the code
+  if (hashIdx >= 0) return s.slice(hashIdx + 1).trim();
   return s;
 }
 
@@ -878,7 +832,7 @@ async function registerPasskey() {
     throw new Error('WebAuthn is not supported in this browser.');
   }
 
-  out.textContent = 'Requesting registration options...\n';
+  out.textContent = 'Requesting registration options...\\n';
   const opts = await apiJson('/api/auth/register/options', 'GET');
 
   const publicKey = {
@@ -895,24 +849,22 @@ async function registerPasskey() {
     authenticatorSelection: opts.authenticatorSelection,
   };
 
-  out.textContent += 'Creating passkey...\n';
+  out.textContent += 'Creating passkey...\\n';
   const cred = await navigator.credentials.create({ publicKey });
   if (!cred) throw new Error('Registration cancelled.');
 
   const att = cred.response;
 
-  // Send attestationObject + clientDataJSON for server-side verification.
-  // Your server must verify with a WebAuthn library; do not accept this blindly in production.
   const payload = {
     credential_id_b64u: b64urlEncode(new Uint8Array(cred.rawId)),
     attestation_object_b64u: bufToB64u(att.attestationObject),
     client_data_json_b64u: bufToB64u(att.clientDataJSON),
   };
 
-  out.textContent += 'Verifying with server...\n';
+  out.textContent += 'Verifying with server...\\n';
   await apiJson('/api/auth/register/verify', 'POST', payload);
 
-  out.textContent += 'Registered and signed in.\n';
+  out.textContent += 'Registered and signed in.\\n';
 }
 
 async function loginPasskey() {
@@ -923,7 +875,7 @@ async function loginPasskey() {
     throw new Error('WebAuthn is not supported in this browser.');
   }
 
-  out.textContent = 'Requesting login options...\n';
+  out.textContent = 'Requesting login options...\\n';
   const opts = await apiJson('/api/auth/login/options', 'GET');
 
   const publicKey = {
@@ -936,7 +888,7 @@ async function loginPasskey() {
     })),
   };
 
-  out.textContent += 'Requesting assertion...\n';
+  out.textContent += 'Requesting assertion...\\n';
   const assertion = await navigator.credentials.get({ publicKey });
   if (!assertion) throw new Error('Login cancelled.');
 
@@ -949,17 +901,17 @@ async function loginPasskey() {
     user_handle_b64u: res.userHandle ? bufToB64u(res.userHandle) : null,
   };
 
-  out.textContent += 'Verifying with server...\n';
+  out.textContent += 'Verifying with server...\\n';
   await apiJson('/api/auth/login/verify', 'POST', payload);
 
-  out.textContent += 'Signed in.\n';
+  out.textContent += 'Signed in.\\n';
 }
 
 async function logout() {
   const out = document.getElementById('authOut');
   out.textContent = '';
   await apiJson('/api/auth/logout', 'POST', {});
-  out.textContent = 'Signed out.\n';
+  out.textContent = 'Signed out.\\n';
 }
 
 /* -------------------------- Helpers -------------------------- */
