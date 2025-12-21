@@ -63,7 +63,12 @@ if (str_starts_with($uri, '/api/')) {
     if ($uri === '/api/pow/challenge') {
         api_pow_challenge($pdo, $config);
     }
-
+    
+    if ($uri === '/api/auth/register/options') api_auth_register_options($pdo, $config);
+    if ($uri === '/api/auth/register/verify') api_auth_register_verify($pdo, $config);
+    if ($uri === '/api/auth/login/options') api_auth_login_options($pdo, $config);
+    if ($uri === '/api/auth/login/verify') api_auth_login_verify($pdo, $config);
+    if ($uri === '/api/auth/logout') api_auth_logout();
 
     json_response(['error' => 'Not found'], 404);
 }
