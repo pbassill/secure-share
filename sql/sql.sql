@@ -57,3 +57,24 @@ CREATE TABLE IF NOT EXISTS pow_challenges (
 ) ENGINE=InnoDB;
 
 CREATE INDEX idx_pow_expires ON pow_challenges (expires_at);
+
+CREATE TABLE IF NOT EXISTS users (
+  id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  handle      VARBINARY(32) NOT NULL,         -- random user handle, not email
+  created_at  DATETIME NOT NULL
+) ENGINE=InnoDB;
+
+CREATE UNIQUE INDEX ux_users_handle ON users (handle);
+
+CREATE TABLE IF NOT EXISTS user_webauthn_credentials (
+  id                BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id           BIGINT UNSIGNED NOT NULL,
+  credential_id     VARBINARY(255) NOT NULL,
+  public_key_cbor   BLOB NOT NULL,
+  sign_count        INT UNSIGNED NOT NULL DEFAULT 0,
+  created_at        DATETIME NOT NULL,
+  UNIQUE KEY ux_cred (credential_id),
+  INDEX idx_user (user_id),
+  CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
