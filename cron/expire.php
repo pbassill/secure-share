@@ -23,3 +23,5 @@ foreach ($rows as $r) {
 
 // Also clear expired upload tokens
 $pdo->prepare("DELETE FROM uploads WHERE token_expires_at < ?")->execute([$now]);
+$pdo->prepare("DELETE FROM pow_challenges WHERE expires_at < ?")->execute([$now]);
+
