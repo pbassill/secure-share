@@ -5,6 +5,7 @@ require __DIR__ . '/../app/bootstrap.php';
 require __DIR__ . '/../app/db.php';
 require __DIR__ . '/../app/storage.php';
 require __DIR__ . '/../app/rate_limit.php';
+require __DIR__ . '/../app/webauthn.php';
 require __DIR__ . '/../app/api.php';
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
