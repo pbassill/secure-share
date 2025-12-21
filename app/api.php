@@ -308,3 +308,81 @@ function api_delete(PDO $pdo, array $config, string $locatorHex): never {
 
     json_response(['ok' => true], 200);
 }
+
+function leading_zero_bits(string $hash32): int {
+    $bits = 0;
+    for ($i = 0; $i < 32; $i++) {
+        $byte = ord($hash32[$i]);
+        if ($byte === 0) { $bits += 8; continue; }
+        for ($b = 7; $b >= 0; $b--) {
+            if (($byte & (1 << $b)) === 0) $bits++;
+            else return $bits;
+        }
+    }
+    return $bits;
+}
+
+function api_pow_challenge(PDO $pdo, array $config): never {
+    require_method('GET');
+
+    // Difficulty policy: tune as needed. 18–22 bits is typically sub-second to a few seconds in JS.
+    // For tor/i2p you might start at 20 bits; if abuse rises, raise gradually.
+    $difficulty = 20;
+
+    $challengeId = random_bytes(16);
+    $challenge = random_bytes(32);
+    $challengeHash = hash('sha256', $challenge, true);
+
+    $now = gmdate('Y-m-d H:i:s');
+    $exp = gmdate('Y-m-d H:i:s', time() + 10 * 60); // 10 min validity
+
+    $pdo->prepare("INSERT INTO pow_challenges (challenge_id, challenge_hash, difficulty_bits, expires_at, created_at)
+                   VALUES (?, ?, ?, ?, ?)")
+        ->execute([$challengeId, $challengeHash, $difficulty, $exp, $now]);
+
+    json_response([
+        'challenge_id_b64u' => b64url_encode($challengeId),
+        'challenge_b64u' => b64url_encode($challenge),
+        'difficulty_bits' => $difficulty,
+        'expires_at_epoch' => strtotime($exp . ' UTC'),
+    ], 200);
+}
+
+function verify_pow(PDO $pdo, array $config, array $data, string $locator): void {
+    $cid = (string)($data['pow_challenge_id_b64u'] ?? '');
+    $cbytes = (string)($data['pow_challenge_b64u'] ?? '');
+    $nonceB64u = (string)($data['pow_nonce_b64u'] ?? '');
+
+    $challengeId = b64url_decode($cid);
+    $challenge = b64url_decode($cbytes);
+    $nonce = b64url_decode($nonceB64u);
+
+    if ($challengeId === '' || strlen($challengeId) !== 16) json_response(['error' => 'Invalid PoW challenge id'], 400);
+    if ($challenge === '' || strlen($challenge) !== 32) json_response(['error' => 'Invalid PoW challenge'], 400);
+    if ($nonce === '' || strlen($nonce) !== 8) json_response(['error' => 'Invalid PoW nonce'], 400);
+
+    $stmt = $pdo->prepare("SELECT challenge_hash, difficulty_bits, expires_at FROM pow_challenges WHERE challenge_id = ?");
+    $stmt->execute([$challengeId]);
+    $row = $stmt->fetch();
+    if (!$row) json_response(['error' => 'PoW challenge not found'], 400);
+
+    if (strtotime($row['expires_at'] . ' UTC') < time()) {
+        json_response(['error' => 'PoW challenge expired'], 400);
+    }
+
+    $expected = $row['challenge_hash'];
+    $actual = hash('sha256', $challenge, true);
+    if (!timing_safe_equals($expected, $actual)) {
+        json_response(['error' => 'PoW challenge invalid'], 400);
+    }
+
+    $digest = hash('sha256', $challenge . $locator . $nonce, true);
+    $lz = leading_zero_bits($digest);
+    if ($lz < (int)$row['difficulty_bits']) {
+        json_response(['error' => 'PoW failed'], 403);
+    }
+
+    // One-time use: delete challenge to prevent replay
+    $pdo->prepare("DELETE FROM pow_challenges WHERE challenge_id = ?")->execute([$challengeId]);
+}
+
