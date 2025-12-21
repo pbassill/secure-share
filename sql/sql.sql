@@ -47,3 +47,13 @@ CREATE TABLE IF NOT EXISTS rate_limits_user (
 ) ENGINE=InnoDB;
 
 CREATE INDEX idx_rate_limits_user_window ON rate_limits_user (window_start);
+
+CREATE TABLE IF NOT EXISTS pow_challenges (
+  challenge_id      BINARY(16) PRIMARY KEY,
+  challenge_hash    BINARY(32) NOT NULL,
+  difficulty_bits   INT UNSIGNED NOT NULL,
+  expires_at        DATETIME NOT NULL,
+  created_at        DATETIME NOT NULL
+) ENGINE=InnoDB;
+
+CREATE INDEX idx_pow_expires ON pow_challenges (expires_at);
