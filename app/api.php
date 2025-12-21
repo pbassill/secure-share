@@ -386,3 +386,133 @@ function verify_pow(PDO $pdo, array $config, array $data, string $locator): void
     $pdo->prepare("DELETE FROM pow_challenges WHERE challenge_id = ?")->execute([$challengeId]);
 }
 
+function api_auth_register_options(PDO $pdo, array $config): never {
+    require_method('GET');
+
+    // Create a new user handle (random, non-identifying)
+    $handle = random_bytes(32);
+    $now = gmdate('Y-m-d H:i:s');
+    $pdo->prepare("INSERT INTO users (handle, created_at) VALUES (?, ?)")->execute([$handle, $now]);
+    $userId = (int)$pdo->lastInsertId();
+
+    // Store in session during registration
+    $_SESSION['reg_user_id'] = $userId;
+
+    // Create challenge and options; in production, use webauthn-lib to build this.
+    $challenge = random_bytes(32);
+    $_SESSION['reg_challenge'] = $challenge;
+
+    json_response([
+        'rp' => [
+            'name' => 'Secure Share',
+            'id' => $_SERVER['HTTP_HOST'],
+        ],
+        'user' => [
+            'id_b64u' => b64url_encode($handle),
+            'name' => 'user-' . $userId,
+            'displayName' => 'Secure Share User',
+        ],
+        'challenge_b64u' => b64url_encode($challenge),
+        'pubKeyCredParams' => [
+            ['type' => 'public-key', 'alg' => -7],   // ES256
+            ['type' => 'public-key', 'alg' => -257], // RS256
+        ],
+        'timeout' => 60000,
+        'attestation' => 'none',
+        'authenticatorSelection' => [
+            'residentKey' => 'preferred',
+            'userVerification' => 'preferred',
+        ],
+    ], 200);
+}
+
+function api_auth_register_verify(PDO $pdo, array $config): never {
+    require_method('POST');
+    $data = json_decode(get_raw_body(), true);
+    if (!is_array($data)) json_response(['error' => 'Invalid JSON'], 400);
+
+    $userId = (int)($_SESSION['reg_user_id'] ?? 0);
+    $challenge = $_SESSION['reg_challenge'] ?? null;
+    if ($userId <= 0 || !is_string($challenge) || strlen($challenge) !== 32) {
+        json_response(['error' => 'No registration in progress'], 400);
+    }
+
+    // Here you must verify attestation using a WebAuthn library.
+    // You need to extract: credentialId, publicKey (COSE/CBOR), signCount.
+    // If verification succeeds, store in user_webauthn_credentials.
+
+    // Placeholder expected fields from client:
+    $credId = b64url_decode((string)($data['credential_id_b64u'] ?? ''));
+    $pubKeyCbor = b64url_decode((string)($data['public_key_cbor_b64u'] ?? ''));
+    $signCount = (int)($data['sign_count'] ?? 0);
+
+    if ($credId === '' || $pubKeyCbor === '') json_response(['error' => 'Invalid credential data'], 400);
+
+    $now = gmdate('Y-m-d H:i:s');
+    $pdo->prepare("INSERT INTO user_webauthn_credentials (user_id, credential_id, public_key_cbor, sign_count, created_at)
+                   VALUES (?, ?, ?, ?, ?)")
+        ->execute([$userId, $credId, $pubKeyCbor, $signCount, $now]);
+
+    unset($_SESSION['reg_user_id'], $_SESSION['reg_challenge']);
+
+    // Mark authenticated
+    $_SESSION['user_id'] = $userId;
+
+    json_response(['ok' => true, 'user_id' => $userId], 200);
+}
+
+function api_auth_login_options(PDO $pdo, array $config): never {
+    require_method('GET');
+
+    // For privacy-first accounts without email, you need some way to select the user.
+    // The most privacy-preserving approach is to use discoverable credentials (resident keys),
+    // so you do not need a username. In that case, you can provide allowCredentials as empty.
+
+    $challenge = random_bytes(32);
+    $_SESSION['login_challenge'] = $challenge;
+
+    json_response([
+        'challenge_b64u' => b64url_encode($challenge),
+        'timeout' => 60000,
+        'userVerification' => 'preferred',
+        'allowCredentials' => [], // discoverable credentials
+    ], 200);
+}
+
+function api_auth_login_verify(PDO $pdo, array $config): never {
+    require_method('POST');
+    $data = json_decode(get_raw_body(), true);
+    if (!is_array($data)) json_response(['error' => 'Invalid JSON'], 400);
+
+    $challenge = $_SESSION['login_challenge'] ?? null;
+    if (!is_string($challenge) || strlen($challenge) !== 32) {
+        json_response(['error' => 'No login in progress'], 400);
+    }
+
+    // You must verify assertion with a WebAuthn library.
+    // You will receive credentialId, authenticatorData, clientDataJSON, signature, userHandle (optional).
+    // Use credentialId to look up public_key_cbor and user_id, verify signature, check and update sign_count.
+
+    $credId = b64url_decode((string)($data['credential_id_b64u'] ?? ''));
+    if ($credId === '') json_response(['error' => 'Invalid credential id'], 400);
+
+    $stmt = $pdo->prepare("SELECT user_id, public_key_cbor, sign_count FROM user_webauthn_credentials WHERE credential_id = ?");
+    $stmt->execute([$credId]);
+    $row = $stmt->fetch();
+    if (!$row) json_response(['error' => 'Unknown credential'], 403);
+
+    $userId = (int)$row['user_id'];
+
+    // Placeholder: you must verify using library, then update sign_count accordingly.
+    // For now we accept and set the session (not secure until verification is implemented).
+    $_SESSION['user_id'] = $userId;
+    unset($_SESSION['login_challenge']);
+
+    json_response(['ok' => true, 'user_id' => $userId], 200);
+}
+
+function api_auth_logout(): never {
+    require_method('POST');
+    session_destroy();
+    json_response(['ok' => true], 200);
+}
