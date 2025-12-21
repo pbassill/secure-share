@@ -60,6 +60,11 @@ if (str_starts_with($uri, '/api/')) {
         api_delete($pdo, $config, $parts[2]);
     }
 
+    if ($uri === '/api/pow/challenge') {
+        api_pow_challenge($pdo, $config);
+    }
+
+
     json_response(['error' => 'Not found'], 404);
 }
 
