@@ -25,7 +25,7 @@ return [
 
     // Retention policy
     'default_retention_seconds' => 6 * 3600,         // 6 hours
-    'max_retention_seconds' => 14 * 24 * 3600,        // 14 days
+    'max_retention_seconds' => 14 * 24 * 3600,       // 14 days
 
     // Upload token expiry (short-lived)
     'upload_token_ttl_seconds' => 20 * 60,           // 20 minutes
@@ -36,4 +36,7 @@ return [
 
     // Maximum chunks allowed (defensive)
     'max_chunk_count' => 100000,
+
+    // PoW difficulty bits for anonymous tor/i2p (tune as needed)
+    'pow_difficulty_bits' => 20,
 ];

@@ -14,7 +14,7 @@ function json_response(array $data, int $status = 200): never {
 }
 
 function require_method(string $method): void {
-    if ($_SERVER['REQUEST_METHOD'] !== $method) {
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== $method) {
         json_response(['error' => 'Method Not Allowed'], 405);
     }
 }
