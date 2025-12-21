@@ -1,3 +1,37 @@
+# Implementation
+
+You should enforce body size and timeouts at the web server. For 100 MB anonymous with chunked PUTs, you are typically sending 1 MiB bodies repeatedly, so you can keep a moderate max request size (for example 8–16 MiB). This reduces DoS surface. If you later support larger authenticated shares with larger chunks, increase cautiously.
+
+Example vhost snippet:
+
+```
+# Prevent large single-request uploads; chunked uploads should stay small.
+LimitRequestBody 16777216
+
+# Timeouts appropriate for chunk PUTs
+RequestReadTimeout header=20-40,MinRate=500 body=20,MinRate=500
+
+# Disable directory listings, ensure no storage path is under DocumentRoot.
+<Directory "/var/www/secure-share/public">
+    Options -Indexes
+    AllowOverride None
+    Require all granted
+</Directory>
+
+# Security headers (some already set in PHP; it is fine to enforce here too)
+Header always set X-Content-Type-Options "nosniff"
+Header always set Referrer-Policy "no-referrer"
+
+# Avoid caching
+Header always set Cache-Control "no-store"
+```
+Cron entry example:
+```
+*/5 * * * * /usr/bin/php /var/www/secure-share/cron/expire.php >/dev/null 2>&1
+```
+
+If you serve Tor and I2P, ensure the SPA does not call out to any external resources and that absolute URLs are not pointing to clearnet endpoints when accessed via onion/i2p hostnames.
+
 # Design
 
 ## 1) System invariants
