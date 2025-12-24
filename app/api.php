@@ -374,7 +374,7 @@ function api_delete(PDO $pdo, array $config, string $locatorHex): never {
     json_response(['ok' => true], 200);
 }
 
-/* ---------------- Auth scaffolding (placeholders) ---------------- */
+/* ---------------- WebAuthn Authentication ---------------- */
 
 function api_auth_register_options(PDO $pdo, array $config): never {
     require_method('GET');
@@ -385,19 +385,35 @@ function api_auth_register_options(PDO $pdo, array $config): never {
     $userId = (int)$pdo->lastInsertId();
 
     $_SESSION['reg_user_id'] = $userId;
+    $_SESSION['reg_handle'] = $handle;
 
     $challenge = random_bytes(32);
     $_SESSION['reg_challenge'] = $challenge;
 
+    // Get RP ID from host (remove port if present)
+    $rpId = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $rpId = explode(':', $rpId)[0];
+    $_SESSION['reg_rp_id'] = $rpId;
+
+    // Create proper WebAuthn options using library
+    $options = create_webauthn_registration_options(
+        $rpId,
+        'Secure Share',
+        b64url_encode($handle),
+        'user-' . $userId,
+        'Secure Share User',
+        $challenge
+    );
+
     json_response([
         'rp' => [
-            'name' => 'Secure Share',
-            'id' => $_SERVER['HTTP_HOST'],
+            'name' => $options->rp->name,
+            'id' => $options->rp->id,
         ],
         'user' => [
             'id_b64u' => b64url_encode($handle),
-            'name' => 'user-' . $userId,
-            'displayName' => 'Secure Share User',
+            'name' => $options->user->name,
+            'displayName' => $options->user->displayName,
         ],
         'challenge_b64u' => b64url_encode($challenge),
         'pubKeyCredParams' => [
@@ -417,35 +433,65 @@ function api_auth_register_verify(PDO $pdo, array $config): never {
     require_method('POST');
 
     $userId = (int)($_SESSION['reg_user_id'] ?? 0);
+    $handle = $_SESSION['reg_handle'] ?? null;
     $challenge = $_SESSION['reg_challenge'] ?? null;
-    if ($userId <= 0 || !is_string($challenge) || strlen($challenge) !== 32) {
+    $rpId = $_SESSION['reg_rp_id'] ?? 'localhost';
+    
+    if ($userId <= 0 || !is_string($challenge) || strlen($challenge) !== 32 || !is_string($handle)) {
         json_response(['error' => 'No registration in progress'], 400);
     }
-
-    // TODO: Verify using a WebAuthn library. Until then this endpoint is NOT secure.
-    // This placeholder stores raw attestation blobs; you will replace with verified public key and signCount.
 
     $data = json_decode(get_raw_body(), true);
     if (!is_array($data)) json_response(['error' => 'Invalid JSON'], 400);
 
-    $credId = b64url_decode((string)($data['credential_id_b64u'] ?? ''));
-    $attObj = b64url_decode((string)($data['attestation_object_b64u'] ?? ''));
-    $clientData = b64url_decode((string)($data['client_data_json_b64u'] ?? ''));
+    $credIdB64u = (string)($data['credential_id_b64u'] ?? '');
+    $attObjB64u = (string)($data['attestation_object_b64u'] ?? '');
+    $clientDataB64u = (string)($data['client_data_json_b64u'] ?? '');
 
-    if ($credId === '' || $attObj === '' || $clientData === '') {
+    if ($credIdB64u === '' || $attObjB64u === '' || $clientDataB64u === '') {
         json_response(['error' => 'Invalid attestation payload'], 400);
     }
 
-    $now = gmdate('Y-m-d H:i:s');
-    // Store attestationObject as placeholder public key cbor; replace properly with verified public key.
-    $pdo->prepare("INSERT INTO user_webauthn_credentials (user_id, credential_id, public_key_cbor, sign_count, created_at)
-                   VALUES (?, ?, ?, 0, ?)")
-        ->execute([$userId, $credId, $attObj, $now]);
+    try {
+        // Create options object for verification
+        $options = create_webauthn_registration_options(
+            $rpId,
+            'Secure Share',
+            b64url_encode($handle),
+            'user-' . $userId,
+            'Secure Share User',
+            $challenge
+        );
 
-    unset($_SESSION['reg_user_id'], $_SESSION['reg_challenge']);
-    $_SESSION['user_id'] = $userId;
+        // Verify attestation using WebAuthn library
+        $credentialSource = verify_webauthn_attestation(
+            $options,
+            $credIdB64u,
+            $attObjB64u,
+            $clientDataB64u,
+            $rpId
+        );
 
-    json_response(['ok' => true, 'user_id' => $userId], 200);
+        // Store verified credential
+        $now = gmdate('Y-m-d H:i:s');
+        $pdo->prepare("INSERT INTO user_webauthn_credentials (user_id, credential_id, public_key_cbor, sign_count, created_at)
+                       VALUES (?, ?, ?, ?, ?)")
+            ->execute([
+                $userId,
+                $credentialSource->publicKeyCredentialId,
+                $credentialSource->credentialPublicKey,
+                $credentialSource->counter,
+                $now
+            ]);
+
+        unset($_SESSION['reg_user_id'], $_SESSION['reg_handle'], $_SESSION['reg_challenge'], $_SESSION['reg_rp_id']);
+        $_SESSION['user_id'] = $userId;
+
+        json_response(['ok' => true, 'user_id' => $userId], 200);
+    } catch (Exception $e) {
+        error_log('WebAuthn registration verification failed: ' . $e->getMessage());
+        json_response(['error' => 'Attestation verification failed: ' . $e->getMessage()], 400);
+    }
 }
 
 function api_auth_login_options(PDO $pdo, array $config): never {
@@ -454,11 +500,20 @@ function api_auth_login_options(PDO $pdo, array $config): never {
     $challenge = random_bytes(32);
     $_SESSION['login_challenge'] = $challenge;
 
+    // Get RP ID from host (remove port if present)
+    $rpId = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $rpId = explode(':', $rpId)[0];
+    $_SESSION['login_rp_id'] = $rpId;
+
+    // Create proper WebAuthn options using library
+    $options = create_webauthn_authentication_options($rpId, $challenge);
+
     json_response([
         'challenge_b64u' => b64url_encode($challenge),
         'timeout' => 60000,
         'userVerification' => 'preferred',
         'allowCredentials' => [],
+        'rpId' => $rpId,
     ], 200);
 }
 
@@ -466,6 +521,8 @@ function api_auth_login_verify(PDO $pdo, array $config): never {
     require_method('POST');
 
     $challenge = $_SESSION['login_challenge'] ?? null;
+    $rpId = $_SESSION['login_rp_id'] ?? 'localhost';
+    
     if (!is_string($challenge) || strlen($challenge) !== 32) {
         json_response(['error' => 'No login in progress'], 400);
     }
@@ -473,19 +530,64 @@ function api_auth_login_verify(PDO $pdo, array $config): never {
     $data = json_decode(get_raw_body(), true);
     if (!is_array($data)) json_response(['error' => 'Invalid JSON'], 400);
 
-    $credId = b64url_decode((string)($data['credential_id_b64u'] ?? ''));
+    $credIdB64u = (string)($data['credential_id_b64u'] ?? '');
+    $authDataB64u = (string)($data['authenticator_data_b64u'] ?? '');
+    $clientDataB64u = (string)($data['client_data_json_b64u'] ?? '');
+    $signatureB64u = (string)($data['signature_b64u'] ?? '');
+
+    if ($credIdB64u === '' || $authDataB64u === '' || $clientDataB64u === '' || $signatureB64u === '') {
+        json_response(['error' => 'Invalid assertion data'], 400);
+    }
+
+    $credId = b64url_decode($credIdB64u);
     if ($credId === '') json_response(['error' => 'Invalid credential id'], 400);
 
-    $stmt = $pdo->prepare("SELECT user_id FROM user_webauthn_credentials WHERE credential_id = ?");
+    // Retrieve credential from database
+    $stmt = $pdo->prepare("SELECT user_id, credential_id, public_key_cbor, sign_count FROM user_webauthn_credentials WHERE credential_id = ?");
     $stmt->execute([$credId]);
     $row = $stmt->fetch();
     if (!$row) json_response(['error' => 'Unknown credential'], 403);
 
-    // TODO: Verify assertion using WebAuthn library before accepting.
-    $_SESSION['user_id'] = (int)$row['user_id'];
-    unset($_SESSION['login_challenge']);
+    try {
+        // Create credential source from stored data
+        $credentialSource = \Webauthn\PublicKeyCredentialSource::create(
+            $row['credential_id'],
+            'public-key',
+            [],
+            'none',
+            \Webauthn\TrustPath\EmptyTrustPath::create(),
+            \Symfony\Component\Uid\Uuid::v4(), // dummy AAGUID, not used for assertion
+            $row['public_key_cbor'],
+            '', // userHandle not needed for assertion
+            (int)$row['sign_count']
+        );
 
-    json_response(['ok' => true, 'user_id' => (int)$row['user_id']], 200);
+        // Create options object for verification
+        $options = create_webauthn_authentication_options($rpId, $challenge);
+
+        // Verify assertion using WebAuthn library
+        $updatedCredentialSource = verify_webauthn_assertion(
+            $options,
+            $credIdB64u,
+            $authDataB64u,
+            $clientDataB64u,
+            $signatureB64u,
+            $credentialSource,
+            $rpId
+        );
+
+        // Update sign count in database
+        $pdo->prepare("UPDATE user_webauthn_credentials SET sign_count = ? WHERE credential_id = ?")
+            ->execute([$updatedCredentialSource->counter, $credId]);
+
+        $_SESSION['user_id'] = (int)$row['user_id'];
+        unset($_SESSION['login_challenge'], $_SESSION['login_rp_id']);
+
+        json_response(['ok' => true, 'user_id' => (int)$row['user_id']], 200);
+    } catch (Exception $e) {
+        error_log('WebAuthn login verification failed: ' . $e->getMessage());
+        json_response(['error' => 'Assertion verification failed: ' . $e->getMessage()], 403);
+    }
 }
 
 function api_auth_logout(): never {
